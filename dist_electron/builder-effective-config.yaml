@@ -1,0 +1,22 @@
+directories:
+  output: dist_electron
+  buildResources: build
+appId: com.shreesamarth.medical
+productName: Shree Samarth Medical
+copyright: Copyright © 2026 Shree Samarth Medical
+files:
+  - filter:
+      - dist/**/*
+      - server/**/*
+      - electron/**/*
+      - package.json
+win:
+  target: nsis
+  icon: public/icon.png
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  runAfterFinish: true
+asar: true
+electronVersion: 28.3.3

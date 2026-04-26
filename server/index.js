@@ -1,8 +1,12 @@
 const express = require('express');
 const cors = require('cors');
+const { exec } = require('child_process');
 const db = require('./db');
 const { initWhatsApp } = require('./whatsapp');
-const { encrypt, decrypt, encryptionTrace, generateHMAC, verifyHMAC } = require('./encryption');
+const { encrypt, decrypt } = require('./encryption');
+
+const { createBackup, listBackups, deleteBackup } = require('./backup');
+const { logAction } = require('./audit');
 
 const app = express();
 app.use(cors());
@@ -10,6 +14,168 @@ app.use(express.json({ limit: '50mb' })); // Increased limit for PDF base64
 
 // Initialize WhatsApp
 initWhatsApp(app);
+
+// Automatic Startup Backup
+createBackup('Auto').then(res => {
+  console.log('Auto-backup created:', res.filename);
+}).catch(err => {
+  console.error('Auto-backup failed:', err);
+});
+
+// ============ AUDIT & BACKUPS ============
+app.get('/api/backups', async (req, res) => {
+  try {
+    res.json(listBackups());
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/backups', async (req, res) => {
+  try {
+    const result = await createBackup('Manual');
+    logAction('BACKUP_CREATED', 'System', null, null, result);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/backups/:id', (req, res) => {
+  try {
+    deleteBackup(req.params.id);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/backups/locate', (req, res) => {
+  try {
+    const dbPath = db.DB_PATH;
+    const folderPath = require('path').dirname(dbPath);
+    let command = '';
+
+    if (process.platform === 'win32') {
+      command = `explorer /select,"${dbPath}"`;
+    } else if (process.platform === 'darwin') {
+      command = `open -R "${dbPath}"`;
+    } else {
+      command = `xdg-open "${folderPath}"`;
+    }
+
+    exec(command, (err) => {
+      if (err) return res.status(500).json({ error: 'Failed to open folder: ' + err.message });
+      res.json({ success: true, path: dbPath });
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/audit-logs', (req, res) => {
+  const { limit = 100 } = req.query;
+  const logs = db.prepare('SELECT * FROM audit_logs ORDER BY created_at DESC LIMIT ?').all(parseInt(limit));
+  res.json(logs);
+});
+
+// ============ REPORTS ============
+app.get('/api/reports/gst', (req, res) => {
+  const { from, to } = req.query;
+  try {
+    const sales = db.prepare(`
+      SELECT strftime('%Y-%m', created_at) as month, 
+             SUM(subtotal) as taxable_value, 
+             SUM(gst_amount) as total_gst, 
+             SUM(total_amount) as total_sales
+      FROM invoices
+      WHERE date(created_at) BETWEEN ? AND ?
+      GROUP BY month
+      ORDER BY month DESC
+    `).all(from, to);
+
+    const breakup = db.prepare(`
+      SELECT gst_percent, 
+             SUM((quantity * unit_price) - discount_amount) as taxable_value,
+             SUM(gst_amount) as gst_amount
+      FROM invoice_items
+      JOIN invoices ON invoices.id = invoice_items.invoice_id
+      WHERE date(invoices.created_at) BETWEEN ? AND ?
+      GROUP BY gst_percent
+    `).all(from, to);
+
+    res.json({ sales, breakup });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/reports/h1', (req, res) => {
+  const { from, to } = req.query;
+  try {
+    const data = db.prepare(`
+      SELECT i.invoice_number, i.created_at, h1.patient_name, h1.doctor_name, h1.doctor_reg_no, m.brand_name, it.quantity
+      FROM invoice_h1_details h1
+      JOIN invoices i ON i.id = h1.invoice_id
+      JOIN invoice_items it ON it.invoice_id = i.id
+      JOIN medicines m ON m.id = it.medicine_id
+      WHERE m.is_h1 = 1 AND date(i.created_at) BETWEEN ? AND ?
+    `).all(from, to);
+    res.json(data);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/reports/expiry', (req, res) => {
+  const { days = 90 } = req.query;
+  try {
+    const data = db.prepare(`
+      SELECT m.brand_name, m.company_name, b.batch_number, b.expiry_date, b.quantity
+      FROM batches b
+      JOIN medicines m ON m.id = b.medicine_id
+      WHERE b.quantity > 0 AND b.expiry_date <= date('now', '+' || ? || ' days')
+      ORDER BY b.expiry_date ASC
+    `).all(days);
+    res.json(data);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/reports/low-stock', (req, res) => {
+  const { threshold = 10 } = req.query;
+  try {
+    const data = db.prepare(`
+      SELECT m.brand_name, m.company_name, m.unit_category, SUM(b.quantity) as total_stock
+      FROM medicines m
+      JOIN batches b ON b.medicine_id = m.id
+      GROUP BY m.id
+      HAVING total_stock <= ?
+      ORDER BY total_stock ASC
+    `).all(threshold);
+    res.json(data);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/reports/sales-summary', (req, res) => {
+  const { from, to } = req.query;
+  try {
+    const data = db.prepare(`
+      SELECT invoice_number, created_at, customer_name, subtotal, gst_amount, total_amount, payment_mode
+      FROM invoices
+      WHERE date(created_at) BETWEEN ? AND ?
+      ORDER BY created_at DESC
+    `).all(from, to);
+    res.json(data);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/reports/customer-credit', (req, res) => {
+  try {
+    const data = db.prepare(`
+      SELECT name, phone, email, current_balance
+      FROM customers
+      WHERE current_balance > 0
+      ORDER BY current_balance DESC
+    `).all();
+    res.json(data);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
 
 // ============ SETTINGS ============
 app.get('/api/settings', (req, res) => {
@@ -46,11 +212,11 @@ app.get('/api/medicines', (req, res) => {
     conditions.push('m.is_active = 1');
   }
   if (search) {
-    conditions.push('(m.brand_name LIKE ? OR m.generic_name LIKE ? OR m.company_name LIKE ?)');
-    params.push(`%${search}%`, `%${search}%`, `%${search}%`);
+    conditions.push('(m.brand_name LIKE ? OR m.generic_name LIKE ? OR m.company_name LIKE ? OR m.alias LIKE ?)');
+    params.push(`%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`);
   }
   if (conditions.length) query += ' WHERE ' + conditions.join(' AND ');
-  query += ' GROUP BY m.id ORDER BY m.brand_name';
+  query += " GROUP BY m.id ORDER BY (CASE WHEN m.alias IS NULL OR m.alias = '' THEN 1 ELSE 0 END), m.alias, m.brand_name";
   
   res.json(db.prepare(query).all(...params));
 });
@@ -68,25 +234,63 @@ app.get('/api/medicines-categories', (req, res) => {
 });
 
 app.post('/api/medicines', (req, res) => {
-  const { brand_name, generic_name, company_name, drug_group, unit_category, hsn_code, gst_percent, schedule, is_h1, tablets_per_strip } = req.body;
+  const { alias, brand_name, generic_name, company_name, drug_group, unit_category, hsn_code, gst_percent, schedule, is_h1, tablets_per_strip } = req.body;
   if (!brand_name) return res.status(400).json({ error: 'Brand name is required' });
   try {
     const result = db.prepare(
-      `INSERT INTO medicines (brand_name, generic_name, company_name, drug_group, unit_category, hsn_code, gst_percent, schedule, is_h1, tablets_per_strip)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).run(brand_name, generic_name || '', company_name || '', drug_group || '', unit_category || 'Tablet', hsn_code || '', gst_percent || 12, schedule || '', is_h1 ? 1 : 0, tablets_per_strip || 10);
+      `INSERT INTO medicines (alias, brand_name, generic_name, company_name, drug_group, unit_category, hsn_code, gst_percent, schedule, is_h1, tablets_per_strip)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(alias || '', brand_name, generic_name || '', company_name || '', drug_group || '', unit_category || 'Tablet', hsn_code || '', gst_percent || 12, schedule || '', is_h1 ? 1 : 0, tablets_per_strip || 10);
+    
+    logAction('MEDICINE_CREATED', 'Medicine', result.lastInsertRowid, null, req.body);
     res.json({ id: result.lastInsertRowid, ...req.body });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
+app.post('/api/medicines/bulk', (req, res) => {
+  const { medicines: meds } = req.body;
+  if (!meds || !Array.isArray(meds)) return res.status(400).json({ error: 'Array of medicines required' });
+  
+  const stmt = db.prepare(`
+    INSERT INTO medicines (alias, brand_name, generic_name, company_name, drug_group, unit_category, hsn_code, gst_percent, schedule, is_h1, tablets_per_strip)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+
+  const txn = db.transaction((list) => {
+    for (const m of list) {
+      stmt.run(
+        m.alias || '',
+        m.brand_name,
+        m.generic_name || '',
+        m.company_name || '',
+        m.drug_group || '',
+        m.unit_category || 'Tablet',
+        m.hsn_code || '',
+        m.gst_percent || 12,
+        m.schedule || '',
+        m.is_h1 ? 1 : 0,
+        m.tablets_per_strip || 10
+      );
+    }
+  });
+
+  try {
+    txn(meds);
+    logAction('BULK_MEDICINE_IMPORT', 'Medicine', null, null, { count: meds.length });
+    res.json({ success: true, count: meds.length });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.put('/api/medicines/:id', (req, res) => {
-  const { brand_name, generic_name, company_name, drug_group, unit_category, hsn_code, gst_percent, schedule, is_active, is_h1, tablets_per_strip } = req.body;
+  const { alias, brand_name, generic_name, company_name, drug_group, unit_category, hsn_code, gst_percent, schedule, is_active, is_h1, tablets_per_strip } = req.body;
   try {
     db.prepare(
-      `UPDATE medicines SET brand_name=?, generic_name=?, company_name=?, drug_group=?, unit_category=?, hsn_code=?, gst_percent=?, schedule=?, is_active=?, is_h1=?, tablets_per_strip=?, updated_at=datetime('now','localtime') WHERE id=?`
-    ).run(brand_name, generic_name || '', company_name || '', drug_group || '', unit_category || 'Tablet', hsn_code || '', gst_percent || 12, schedule || '', is_active !== undefined ? is_active : 1, is_h1 ? 1 : 0, tablets_per_strip || 10, req.params.id);
+      `UPDATE medicines SET alias=?, brand_name=?, generic_name=?, company_name=?, drug_group=?, unit_category=?, hsn_code=?, gst_percent=?, schedule=?, is_active=?, is_h1=?, tablets_per_strip=?, updated_at=datetime('now','localtime') WHERE id=?`
+    ).run(alias || '', brand_name, generic_name || '', company_name || '', drug_group || '', unit_category || 'Tablet', hsn_code || '', gst_percent || 12, schedule || '', is_active !== undefined ? is_active : 1, is_h1 ? 1 : 0, tablets_per_strip || 10, req.params.id);
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -125,6 +329,7 @@ app.delete('/api/medicines/:id', (req, res) => {
       // If we got here, it's safe to delete
       db.prepare('DELETE FROM batches WHERE medicine_id = ?').run(req.params.id);
       db.prepare('DELETE FROM medicines WHERE id = ?').run(req.params.id);
+      logAction('MEDICINE_DELETED', 'Medicine', req.params.id);
     });
 
     txn();
@@ -475,7 +680,8 @@ function getNextInvoiceNumber() {
       });
   
       const total_amount = Math.round((subtotal + gst_total - (discount_amount || 0)) * 100) / 100;
-      const paid = amount_paid !== undefined ? amount_paid : (payment_mode === 'Udhaari' ? 0 : total_amount);
+      const isCredit = payment_mode && ['pending', 'udhaari'].includes(payment_mode.toLowerCase().trim());
+      const paid = amount_paid !== undefined ? amount_paid : (isCredit ? 0 : total_amount);
       const credit = Math.max(0, total_amount - paid);
   
       const invResult = db.prepare(
@@ -529,8 +735,10 @@ function getNextInvoiceNumber() {
         FROM invoice_items ii JOIN medicines m ON ii.medicine_id = m.id JOIN batches b ON ii.batch_id = b.id WHERE ii.invoice_id = ?`).all(invoiceId);
       const savedH1Details = db.prepare(`SELECT * FROM invoice_h1_details WHERE invoice_id = ?`).get(invoiceId);
 
-      const inv = decryptInvoiceCustomerFields(invRaw);
-      return { ...inv, items: invItems, h1_details: savedH1Details };
+      const result = { ...decryptInvoiceCustomerFields(invRaw), items: invItems, h1_details: savedH1Details };
+      
+      logAction('INVOICE_CREATED', 'Invoice', invoiceId, null, { invoice_number: result.invoice_number, total_amount: result.total_amount });
+      return result;
   });
 
   try {
@@ -591,48 +799,62 @@ app.post('/api/purchases', (req, res) => {
   const { supplier_id, invoice_number, items, notes, purchase_date, amount_paid, payment_mode, payment_notes } = req.body;
   if (!supplier_id || !items || !items.length) return res.status(400).json({ error: 'supplier_id and items required' });
 
-  const txn = db.transaction(() => {
-    let total = 0;
-    const purchaseResult = db.prepare(
-      `INSERT INTO purchases (supplier_id, invoice_number, total_amount, amount_paid, notes, purchase_date) VALUES (?, ?, 0, ?, ?, ?)`
-    ).run(supplier_id, invoice_number || '', amount_paid || 0, notes || '', purchase_date || new Date().toISOString().slice(0, 10));
-    const purchaseId = purchaseResult.lastInsertRowid;
-
-    for (const item of items) {
-      // Create batch
-      const batchResult = db.prepare(
-        `INSERT INTO batches (medicine_id, batch_number, mfg_date, expiry_date, purchase_rate, selling_rate, mrp, quantity, supplier_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-      ).run(item.medicine_id, item.batch_number, item.mfg_date || '', item.expiry_date, item.purchase_rate, item.selling_rate || 0, item.mrp || 0, item.quantity, supplier_id);
-
-      const batchId = batchResult.lastInsertRowid;
-      const lineTotal = item.quantity * item.purchase_rate;
-      total += lineTotal;
-
-      db.prepare(
-        `INSERT INTO purchase_items (purchase_id, medicine_id, batch_id, quantity, purchase_rate, selling_rate, mrp)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`
-      ).run(purchaseId, item.medicine_id, batchId, item.quantity, item.purchase_rate, item.selling_rate || 0, item.mrp || 0);
-    }
-
-    db.prepare('UPDATE purchases SET total_amount = ? WHERE id = ?').run(total, purchaseId);
-
-    // If payment was made at the time of purchase, log it in supplier_payments
-    if (amount_paid && amount_paid > 0) {
-      db.prepare(
-        `INSERT INTO supplier_payments (supplier_id, amount, payment_mode, payment_date, notes)
-         VALUES (?, ?, ?, ?, ?)`
-      ).run(supplier_id, amount_paid, payment_mode || 'Cash', purchase_date || new Date().toISOString().slice(0, 10), payment_notes || 'Paid at time of purchase');
-    }
-
-    return { id: purchaseId, total_amount: total };
-  });
-
   try {
+    const txn = db.transaction(() => {
+      // 0. Preliminary existence checks to provide better error messages
+      const supplier = db.prepare('SELECT id FROM suppliers WHERE id = ?').get(supplier_id);
+      if (!supplier) throw new Error(`Supplier with ID ${supplier_id} not found. It may have been deleted.`);
+
+      for (const item of items) {
+        const med = db.prepare('SELECT brand_name FROM medicines WHERE id = ?').get(item.medicine_id);
+        if (!med) throw new Error(`Medicine at row ${items.indexOf(item)+1} not found in inventory. Please remove and re-add it.`);
+      }
+
+      let total = 0;
+      const purchaseResult = db.prepare(
+        `INSERT INTO purchases (supplier_id, invoice_number, total_amount, amount_paid, notes, purchase_date) VALUES (?, ?, 0, ?, ?, ?)`
+      ).run(supplier_id, invoice_number || '', amount_paid || 0, notes || '', purchase_date || new Date().toISOString().slice(0, 10));
+      const purchaseId = purchaseResult.lastInsertRowid;
+
+      for (const item of items) {
+        // Create batch
+        const batchResult = db.prepare(
+          `INSERT INTO batches (medicine_id, batch_number, mfg_date, expiry_date, purchase_rate, selling_rate, mrp, quantity, supplier_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        ).run(item.medicine_id, item.batch_number, item.mfg_date || '', item.expiry_date, item.purchase_rate, item.selling_rate || 0, item.mrp || 0, item.quantity, supplier_id);
+
+        const batchId = batchResult.lastInsertRowid;
+        const lineTotal = item.quantity * item.purchase_rate;
+        total += lineTotal;
+
+        db.prepare(
+          `INSERT INTO purchase_items (purchase_id, medicine_id, batch_id, quantity, purchase_rate, selling_rate, mrp)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`
+        ).run(purchaseId, item.medicine_id, batchId, item.quantity, item.purchase_rate, item.selling_rate || 0, item.mrp || 0);
+      }
+
+      db.prepare('UPDATE purchases SET total_amount = ? WHERE id = ?').run(total, purchaseId);
+
+      // If payment was made at the time of purchase, log it in supplier_payments
+      if (amount_paid && amount_paid > 0) {
+        db.prepare(
+          `INSERT INTO supplier_payments (supplier_id, amount, payment_mode, payment_date, notes)
+           VALUES (?, ?, ?, ?, ?)`
+        ).run(supplier_id, amount_paid, payment_mode || 'Cash', purchase_date || new Date().toISOString().slice(0, 10), payment_notes || 'Paid at time of purchase');
+      }
+
+      return { id: purchaseId, total_amount: total };
+    });
+
     const result = txn();
     res.json(result);
   } catch (err) {
-    res.status(400).json({ error: err.message });
+    console.error('Purchase creation error:', err);
+    let msg = err.message;
+    if (msg.includes('FOREIGN KEY constraint failed')) {
+      msg = "Database integrity error: A referenced medicine or supplier record is missing. Please refresh the page and try again.";
+    }
+    res.status(400).json({ error: msg });
   }
 });
 
@@ -641,88 +863,102 @@ app.put('/api/purchases/:id', (req, res) => {
   const { supplier_id, invoice_number, items, notes, purchase_date, amount_paid } = req.body;
   if (!supplier_id || !items || !items.length) return res.status(400).json({ error: 'supplier_id and items required' });
 
-  const txn = db.transaction(() => {
-    // 1. Fetch current purchase items
-    const existingItems = db.prepare('SELECT * FROM purchase_items WHERE purchase_id = ?').all(purchaseId);
-    
-    // Create maps for quick lookup
-    const existingMap = new Map(existingItems.map(i => [i.batch_id, i]));
-    const newMap = new Map(items.filter(i => i.batch_id).map(i => [i.batch_id, i]));
-    
-    // 2. Process removals: Items in existingMap but not in new payload
-    for (const [batchId, oldItem] of existingMap) {
-      if (!newMap.has(batchId)) {
-        const batch = db.prepare('SELECT quantity, batch_number FROM batches WHERE id = ?').get(batchId);
-        if (batch) {
-          if (batch.quantity < oldItem.quantity) {
-             throw new Error(`Cannot remove item (Batch: ${batch.batch_number}) because some quantity has already been sold.`);
+  try {
+    const txn = db.transaction(() => {
+      // 0. Preliminary existence checks
+      const supplier = db.prepare('SELECT id FROM suppliers WHERE id = ?').get(supplier_id);
+      if (!supplier) throw new Error(`Supplier with ID ${supplier_id} not found.`);
+
+      for (const item of items) {
+        const med = db.prepare('SELECT brand_name FROM medicines WHERE id = ?').get(item.medicine_id);
+        if (!med) throw new Error(`Medicine '${item.medicine_name}' not found in inventory.`);
+      }
+
+      // 1. Fetch current purchase items
+      const existingItems = db.prepare('SELECT * FROM purchase_items WHERE purchase_id = ?').all(purchaseId);
+      
+      // Create maps for quick lookup
+      const existingMap = new Map(existingItems.map(i => [i.batch_id, i]));
+      const newMap = new Map(items.filter(i => i.batch_id).map(i => [i.batch_id, i]));
+      
+      // 2. Process removals: Items in existingMap but not in new payload
+      for (const [batchId, oldItem] of existingMap) {
+        if (!newMap.has(batchId)) {
+          const batch = db.prepare('SELECT quantity, batch_number FROM batches WHERE id = ?').get(batchId);
+          if (batch) {
+            if (batch.quantity < oldItem.quantity) {
+               throw new Error(`Cannot remove item (Batch: ${batch.batch_number}) because some quantity has already been sold from this batch.`);
+            }
+            db.prepare('DELETE FROM purchase_items WHERE purchase_id = ? AND batch_id = ?').run(purchaseId, batchId);
+            db.prepare('DELETE FROM batches WHERE id = ?').run(batchId);
           }
-          db.prepare('DELETE FROM purchase_items WHERE purchase_id = ? AND batch_id = ?').run(purchaseId, batchId);
-          db.prepare('DELETE FROM batches WHERE id = ?').run(batchId);
         }
       }
-    }
 
-    let total = 0;
+      let total = 0;
 
-    // 3. Process new and updated items
-    for (const item of items) {
-      if (!item.batch_id) {
-        // Brand new item added to existing purchase
-        const batchResult = db.prepare(
-          `INSERT INTO batches (medicine_id, batch_number, mfg_date, expiry_date, purchase_rate, selling_rate, mrp, quantity, supplier_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-        ).run(item.medicine_id, item.batch_number, item.mfg_date || '', item.expiry_date, item.purchase_rate, item.selling_rate || 0, item.mrp || 0, item.quantity, supplier_id);
+      // 3. Process new and updated items
+      for (const item of items) {
+        if (!item.batch_id) {
+          // Brand new item added to existing purchase
+          const batchResult = db.prepare(
+            `INSERT INTO batches (medicine_id, batch_number, mfg_date, expiry_date, purchase_rate, selling_rate, mrp, quantity, supplier_id)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          ).run(item.medicine_id, item.batch_number, item.mfg_date || '', item.expiry_date, item.purchase_rate, item.selling_rate || 0, item.mrp || 0, item.quantity, supplier_id);
 
-        const batchId = batchResult.lastInsertRowid;
-        db.prepare(
-          `INSERT INTO purchase_items (purchase_id, medicine_id, batch_id, quantity, purchase_rate, selling_rate, mrp)
-           VALUES (?, ?, ?, ?, ?, ?, ?)`
-        ).run(purchaseId, item.medicine_id, batchId, item.quantity, item.purchase_rate, item.selling_rate || 0, item.mrp || 0);
-
-        total += (item.quantity * item.purchase_rate);
-      } else {
-        // Updating an existing item
-        const oldItem = existingMap.get(item.batch_id);
-        const batch = db.prepare('SELECT quantity, batch_number FROM batches WHERE id = ?').get(item.batch_id);
-        
-        if (oldItem && batch) {
-          const soldQuantity = oldItem.quantity - batch.quantity; 
-          
-          if (item.quantity < soldQuantity && soldQuantity > 0) {
-            throw new Error(`Cannot reduce quantity of ${batch.batch_number} below ${soldQuantity} (quantity already sold).`);
-          }
-
-          const newBatchQty = batch.quantity - oldItem.quantity + item.quantity;
-
+          const batchId = batchResult.lastInsertRowid;
           db.prepare(
-            `UPDATE batches SET batch_number=?, mfg_date=?, expiry_date=?, purchase_rate=?, selling_rate=?, mrp=?, quantity=? WHERE id=?`
-          ).run(item.batch_number, item.mfg_date || '', item.expiry_date, item.purchase_rate, item.selling_rate || 0, item.mrp || 0, newBatchQty, item.batch_id);
-
-          db.prepare(
-            `UPDATE purchase_items SET quantity=?, purchase_rate=?, selling_rate=?, mrp=? WHERE purchase_id=? AND batch_id=?`
-          ).run(item.quantity, item.purchase_rate, item.selling_rate || 0, item.mrp || 0, purchaseId, item.batch_id);
+            `INSERT INTO purchase_items (purchase_id, medicine_id, batch_id, quantity, purchase_rate, selling_rate, mrp)
+             VALUES (?, ?, ?, ?, ?, ?, ?)`
+          ).run(purchaseId, item.medicine_id, batchId, item.quantity, item.purchase_rate, item.selling_rate || 0, item.mrp || 0);
 
           total += (item.quantity * item.purchase_rate);
+        } else {
+          // Updating an existing item
+          const oldItem = existingMap.get(item.batch_id);
+          const batch = db.prepare('SELECT quantity, batch_number FROM batches WHERE id = ?').get(item.batch_id);
+          
+          if (oldItem && batch) {
+            const soldQuantity = oldItem.quantity - batch.quantity; 
+            
+            if (item.quantity < soldQuantity && soldQuantity > 0) {
+              throw new Error(`Cannot reduce quantity of ${batch.batch_number} below ${soldQuantity} (quantity already sold).`);
+            }
+
+            const newBatchQty = batch.quantity - oldItem.quantity + item.quantity;
+
+            db.prepare(
+              `UPDATE batches SET batch_number=?, mfg_date=?, expiry_date=?, purchase_rate=?, selling_rate=?, mrp=?, quantity=? WHERE id=?`
+            ).run(item.batch_number, item.mfg_date || '', item.expiry_date, item.purchase_rate, item.selling_rate || 0, item.mrp || 0, newBatchQty, item.batch_id);
+
+            db.prepare(
+              `UPDATE purchase_items SET quantity=?, purchase_rate=?, selling_rate=?, mrp=? WHERE purchase_id=? AND batch_id=?`
+            ).run(item.quantity, item.purchase_rate, item.selling_rate || 0, item.mrp || 0, purchaseId, item.batch_id);
+
+            total += (item.quantity * item.purchase_rate);
+          }
         }
       }
-    }
 
-    // 4. Update the Purchase record
-    const purchaseInfo = db.prepare('SELECT total_amount, amount_paid FROM purchases WHERE id=?').get(purchaseId);
-    
-    db.prepare(
-      `UPDATE purchases SET supplier_id = ?, invoice_number = ?, notes = ?, purchase_date = ?, total_amount = ?, amount_paid = ? WHERE id = ?`
-    ).run(supplier_id, invoice_number || '', notes || '', purchase_date || new Date().toISOString().slice(0, 10), total, amount_paid !== undefined ? amount_paid : purchaseInfo.amount_paid, purchaseId);
+      // 4. Update the Purchase record
+      const purchaseInfo = db.prepare('SELECT total_amount, amount_paid FROM purchases WHERE id=?').get(purchaseId);
+      
+      db.prepare(
+        `UPDATE purchases SET supplier_id = ?, invoice_number = ?, notes = ?, purchase_date = ?, total_amount = ?, amount_paid = ? WHERE id = ?`
+      ).run(supplier_id, invoice_number || '', notes || '', purchase_date || new Date().toISOString().slice(0, 10), total, amount_paid !== undefined ? amount_paid : purchaseInfo.amount_paid, purchaseId);
 
-    return { id: purchaseId, total_amount: total };
-  });
+      return { id: purchaseId, total_amount: total };
+    });
 
-  try {
     const result = txn();
     res.json(result);
   } catch (err) {
-    res.status(400).json({ error: err.message });
+    console.error('Purchase update error:', err);
+    let msg = err.message;
+    if (msg.includes('FOREIGN KEY constraint failed')) {
+      msg = "Database integrity error: This purchase is linked to records that cannot be modified. Ensure no items from this purchase have been sold before deleting/changing them.";
+    }
+    res.status(400).json({ error: msg });
   }
 });
 
@@ -782,12 +1018,12 @@ app.delete('/api/purchases/:id', (req, res) => {
 
 // ============ DASHBOARD / REPORTS ============
 app.get('/api/dashboard', (req, res) => {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = new Date().toLocaleDateString('en-CA'); // YYYY-MM-DD format
   const monthStart = today.slice(0, 7) + '-01';
 
   const todaySales = db.prepare(`SELECT COALESCE(SUM(total_amount), 0) as total, COUNT(*) as count FROM invoices WHERE date(created_at) = ?`).get(today);
-  const todayCash = db.prepare(`SELECT COALESCE(SUM(total_amount), 0) as total FROM invoices WHERE date(created_at) = ? AND payment_mode = 'Cash'`).get(today);
-  const todayUPI = db.prepare(`SELECT COALESCE(SUM(total_amount), 0) as total FROM invoices WHERE date(created_at) = ? AND payment_mode = 'UPI'`).get(today);
+  const todayCash = db.prepare(`SELECT COALESCE(SUM(total_amount), 0) as total FROM invoices WHERE date(created_at) = ? AND LOWER(payment_mode) = 'cash'`).get(today);
+  const todayUPI = db.prepare(`SELECT COALESCE(SUM(total_amount), 0) as total FROM invoices WHERE date(created_at) = ? AND LOWER(payment_mode) = 'upi'`).get(today);
   const todayCredit = db.prepare(`SELECT COALESCE(SUM(credit_amount), 0) as total FROM invoices WHERE date(created_at) = ? AND credit_amount > 0`).get(today);
   
   const monthlySales = db.prepare(`SELECT COALESCE(SUM(total_amount), 0) as total FROM invoices WHERE date(created_at) >= ?`).get(monthStart);
@@ -954,15 +1190,60 @@ app.get('/api/reports/h1-register', (req, res) => {
       query += ` AND h.patient_name LIKE ?`;
       params.push(`%${patient_search}%`);
     }
+
+    query += ` ORDER BY i.created_at DESC`;
     
-    query += ` ORDER BY i.created_at DESC, i.id DESC`;
+    res.json(db.prepare(query).all(...params));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// --- Purchase Summary Report ---
+app.get('/api/reports/purchases-summary', (req, res) => {
+  const { from, to } = req.query;
+  try {
+    let query = `
+      SELECT 
+        s.name as supplier_name,
+        COUNT(p.id) as total_bills,
+        SUM(p.total_amount) as total_amount,
+        SUM(p.amount_paid) as amount_paid,
+        SUM(p.total_amount - p.amount_paid) as outstanding
+      FROM purchases p
+      JOIN suppliers s ON p.supplier_id = s.id
+      WHERE 1=1
+    `;
+    const params = [];
+    if (from) { query += " AND date(p.purchase_date) >= ?"; params.push(from); }
+    if (to) { query += " AND date(p.purchase_date) <= ?"; params.push(to); }
     
-    const reportData = db.prepare(query).all(...params);
-    res.json(reportData);
-  } catch (err) {
-    console.error("Error fetching H1 register: ", err);
-    res.status(500).json({ error: err.message });
-  }
+    query += " GROUP BY s.id ORDER BY total_amount DESC";
+    res.json(db.prepare(query).all(...params));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// --- Profitability Report ---
+app.get('/api/reports/profitability', (req, res) => {
+  const { from, to } = req.query;
+  try {
+    let query = `
+      SELECT 
+        date(i.created_at) as sale_date,
+        COUNT(DISTINCT i.id) as bills,
+        SUM(ii.quantity * ii.unit_price) as sales_value,
+        SUM(ii.quantity * b.purchase_rate) as purchase_cost,
+        SUM((ii.quantity * ii.unit_price) - (ii.quantity * b.purchase_rate)) as gross_profit
+      FROM invoices i
+      JOIN invoice_items ii ON i.id = ii.invoice_id
+      JOIN batches b ON ii.batch_id = b.id
+      WHERE 1=1
+    `;
+    const params = [];
+    if (from) { query += " AND date(i.created_at) >= ?"; params.push(from); }
+    if (to) { query += " AND date(i.created_at) <= ?"; params.push(to); }
+    
+    query += " GROUP BY sale_date ORDER BY sale_date DESC";
+    res.json(db.prepare(query).all(...params));
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // Pay Supplier
@@ -1092,52 +1373,37 @@ app.put('/api/batches/:id/discount', (req, res) => {
   res.json({ success: true });
 });
 
-// ============ ENCRYPTION DEMO (ISE Activity — Data Encryption Course) ============
-// This endpoint demonstrates live AES-256-CBC encryption as implemented in this app.
-// It shows plaintext vs ciphertext, IV, key details, HMAC and decryption verification.
-app.post('/api/encryption-demo', (req, res) => {
-  const { plaintext } = req.body;
-  if (!plaintext) return res.status(400).json({ error: 'plaintext is required' });
-  const trace = encryptionTrace(plaintext);
-  res.json(trace);
-});
-
-// Show raw DB value vs decrypted value for a customer (for demo / presentation)
-app.get('/api/encryption-demo/customer/:id', (req, res) => {
-  const raw = db.prepare('SELECT id, name, phone, address FROM customers WHERE id = ?').get(req.params.id);
-  if (!raw) return res.status(404).json({ error: 'Customer not found' });
-  const decrypted = decryptCustomer(raw);
-  const phoneHmac = generateHMAC(raw.phone);
-  res.json({
-    demonstration: 'AES-256-CBC Encryption in Action',
-    customer_id: raw.id,
-    name: raw.name,
-    phone: {
-      raw_in_database:  raw.phone,
-      decrypted_value:  decrypted.phone,
-      hmac_signature:   phoneHmac,
-      is_encrypted:     raw.phone.includes(':'),
-    },
-    address: {
-      raw_in_database:  raw.address,
-      decrypted_value:  decrypted.address,
-      is_encrypted:     raw.address.includes(':'),
-    },
-    security_proof: {
-      what_attacker_sees:   raw.phone,
-      what_application_shows: decrypted.phone,
-      algorithm: 'AES-256-CBC',
-      key_length: '256-bit',
-    }
-  });
-});
-
 // Error Handler Middleware
 app.use((err, req, res, next) => {
   console.error(err.stack);
   res.status(err.status || 500).json({
     error: err.message || 'Internal Server Error'
   });
+});
+
+// --- Data Reconciliation ---
+app.post('/api/admin/reconcile-balances', (req, res) => {
+  try {
+    const txn = db.transaction(() => {
+      // Reset all customer balances to 0
+      db.prepare('UPDATE customers SET credit_balance = 0').run();
+      
+      // Re-calculate from all Pending invoices
+      const creditInvoices = db.prepare(`
+        SELECT customer_id, SUM(total_amount - amount_paid) as total_credit 
+        FROM invoices 
+        WHERE LOWER(TRIM(payment_mode)) = 'pending'
+        AND customer_id IS NOT NULL
+        GROUP BY customer_id
+      `).all();
+      
+      for (const inv of creditInvoices) {
+        db.prepare('UPDATE customers SET credit_balance = ? WHERE id = ?').run(inv.total_credit, inv.customer_id);
+      }
+    });
+    txn();
+    res.json({ success: true, message: 'Customer balances reconciled successfully.' });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 const PORT = process.env.PORT || 3001;

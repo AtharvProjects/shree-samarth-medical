@@ -82,14 +82,42 @@ export default function NonMovingMedicines() {
     ]);
 
     const csvContent = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
+    const fileName = `Non_Moving_Medicines_${new Date().toISOString().split('T')[0]}.csv`;
+
+    // Check if running in Electron
+    if (window.require) {
+      try {
+        const fs = window.require('fs');
+        const path = window.require('path');
+        const os = window.require('os');
+        const { shell } = window.require('electron');
+        
+        const homeDir = os.homedir();
+        const downloadsPath = path.join(homeDir, 'Downloads');
+        const filePath = path.join(downloadsPath, fileName);
+        
+        fs.writeFileSync(filePath, csvContent);
+        showToast(`CSV exported to Downloads folder: ${fileName}`, 'success');
+        shell.showItemInFolder(filePath);
+        return;
+      } catch (e) {
+        console.error('Electron save error', e);
+        // Fallback to browser download if Electron fails
+      }
+    }
+
+    // Standard Browser Download approach
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.setAttribute('download', `Non_Moving_Medicines_${new Date().toISOString().split('T')[0]}.csv`);
+    link.download = fileName; // Use .download property for better compatibility
     document.body.appendChild(link);
     link.click();
-    document.body.removeChild(link);
+    setTimeout(() => {
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    }, 100);
   };
 
   return (

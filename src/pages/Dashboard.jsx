@@ -39,7 +39,7 @@ export default function Dashboard() {
           <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 6, fontSize: 12, color: 'var(--text-muted)' }}><CreditCard size={14} fill="var(--accent-lavender)" fillOpacity={0.2}/> Digital payments</div>
         </div>
         <div className="glass-card stat-peach">
-          <div className="card-title">Credit (Udhaari)</div>
+          <div className="card-title">Credit (Pending)</div>
           <div className="card-value small">{fmt(data.today.credit)}</div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 6, fontSize: 12, color: 'var(--text-muted)' }}><Clock size={14} fill="var(--accent-peach)" fillOpacity={0.2}/> Pending</div>
         </div>
@@ -203,7 +203,7 @@ export default function Dashboard() {
 
       {data.totalOutstanding > 0 && (
         <div className="glass-card mt-4 stat-rose">
-          <div className="card-title">Total Outstanding (Udhaari)</div>
+          <div className="card-title">Total Outstanding (Pending)</div>
           <div className="card-value">{fmt(data.totalOutstanding)}</div>
         </div>
       )}

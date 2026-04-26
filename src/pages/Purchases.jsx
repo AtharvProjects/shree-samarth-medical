@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { api } from '../services/api';
-import { Search, Plus, Eye, Calendar, User, Package, CreditCard } from 'lucide-react';
+import { Search, Plus, Eye, Calendar, User, Package, CreditCard, Edit2, Trash2 } from 'lucide-react';
 
 export default function Purchases() {
   const [view, setView] = useState('list'); // list, create, detail
@@ -227,6 +227,12 @@ export default function Purchases() {
     setItems(items.filter(i => i.id !== id));
   };
 
+  const editItem = (item) => {
+    setCurrentItem({ ...item });
+    setSearchMed(item.medicine_name);
+    removeItem(item.id);
+  };
+
   const handleSubmit = async () => {
     if (!formData.supplier_id) {
       alert('Please select a supplier');
@@ -240,6 +246,10 @@ export default function Purchases() {
     const paid = parseFloat(formData.amount_paid) || 0;
     if (paid > totalAmt) {
       alert(`❌ Amount Paying (₹${paid.toFixed(2)}) cannot exceed Invoice Total (₹${totalAmt.toFixed(2)})`);
+      return;
+    }
+    if (items.some(i => !i.medicine_id)) {
+      alert('❌ Error: One or more items in the list do not have a valid medicine ID. Please remove and re-add them.');
       return;
     }
     if (paid < 0) {
@@ -573,7 +583,22 @@ export default function Purchases() {
                       <td>{qtyStr}</td>
                       <td>₹{(item.quantity * item.purchase_rate).toFixed(2)}</td>
                       <td>
-                        <button className="text-red-500 hover:text-red-700" onClick={() => removeItem(item.id)}>×</button>
+                        <div className="flex gap-2 justify-end">
+                          <button 
+                            className="text-blue-500 hover:text-blue-700 p-1" 
+                            onClick={() => editItem(item)}
+                            title="Edit item"
+                          >
+                            <Edit2 size={14} />
+                          </button>
+                          <button 
+                            className="text-red-500 hover:text-red-700 p-1" 
+                            onClick={() => removeItem(item.id)}
+                            title="Remove item"
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
                       </td>
                     </tr>
                     );

@@ -176,7 +176,7 @@ const handleWhatsApp = async (inv) => {
                     {inv.doctor_name && <div className="text-muted" style={{ fontSize: 11 }}>Dr. {inv.doctor_name}</div>}
                   </td>
                   <td>
-                    <span className={`badge badge-${inv.payment_mode === 'Udhaari' ? 'red' : 'green'}`}>
+                    <span className={`badge badge-${inv.payment_mode === 'Pending' ? 'red' : 'green'}`}>
                       {inv.payment_mode}
                     </span>
                   </td>
@@ -290,7 +290,7 @@ function InvoiceDetailModal({ invoice, onClose, onPrint, onPDF, onWhatsApp }) {
                 <span>₹{invoice.total_amount.toFixed(2)}</span>
               </div>
               <div className="text-right mt-1">
-                <span className={`badge badge-${invoice.payment_mode === 'Udhaari' ? 'red' : 'green'}`}>
+                <span className={`badge badge-${invoice.payment_mode === 'Pending' ? 'red' : 'green'}`}>
                   {invoice.payment_mode} Payment
                 </span>
               </div>

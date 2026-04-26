@@ -8,8 +8,34 @@
     "server": "node server/index.js",
     "client": "vite",
     "build": "vite build",
-    "seed": "/usr/local/bin/node seed_data.js",
-    "electron:dev": "concurrently \"npm run server\" \"npm run client\" \"wait-on http://localhost:5173 && electron .\""
+    "electron:dev": "concurrently \"npm run server\" \"npm run client\" \"wait-on http://localhost:5173 && electron .\"",
+    "electron:build": "npm run build && electron-builder build --win --x64",
+    "postinstall": "electron-builder install-app-deps"
+  },
+  "build": {
+    "appId": "com.shreesamarth.medical",
+    "productName": "Shree Samarth Medical",
+    "copyright": "Copyright © 2026 Shree Samarth Medical",
+    "directories": {
+      "output": "dist_electron"
+    },
+    "files": [
+      "dist/**/*",
+      "server/**/*",
+      "electron/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "public/icon.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "runAfterFinish": true
+    },
+    "asar": true
   },
   "dependencies": {
     "better-sqlite3": "^12.6.2",

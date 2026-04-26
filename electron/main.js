@@ -20,9 +20,7 @@ if (!gotTheLock) {
   // Start backend
   function startBackend() {
   try {
-    const serverPath = app.isPackaged 
-      ? path.join(process.resourcesPath, 'app.asar', 'server', 'index.js')
-      : path.join(__dirname, 'server', 'index.js');
+    const serverPath = path.join(app.getAppPath(), 'server', 'index.js');
     
     // Set database path for production
     if (app.isPackaged) {
@@ -60,7 +58,7 @@ function createWindow() {
   if (app.isPackaged) {
     // In production, main.js is at the root of app.asar
     // dist/index.html is also at the root of app.asar
-    const indexPath = path.join(__dirname, 'dist', 'index.html');
+    const indexPath = path.join(app.getAppPath(), 'dist', 'index.html');
     
     console.log('Loading index from:', indexPath);
     

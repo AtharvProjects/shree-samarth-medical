@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { api } from '../services/api';
 import { useToast } from '../App';
-import { Search, Plus, Edit2, Package, X, Trash2 } from 'lucide-react';
+import { Search, Plus, Edit2, Package, X, Trash2, Upload } from 'lucide-react';
 import Fuse from 'fuse.js';
 
 export default function Inventory() {
@@ -22,7 +22,7 @@ export default function Inventory() {
   useEffect(() => { load(); }, [load]);
 
   const fuse = useMemo(() => new Fuse(medicines, {
-    keys: ['brand_name', 'generic_name', 'company_name', 'drug_group'],
+    keys: ['alias', 'brand_name', 'generic_name', 'company_name', 'drug_group'],
     threshold: 0.3,
   }), [medicines]);
 
@@ -42,6 +42,48 @@ export default function Inventory() {
     }
   };
 
+  const handleCSVImport = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = async (event) => {
+      try {
+        const text = event.target.result;
+        const rows = text.split('\n').filter(r => r.trim());
+        const headers = rows[0].split(',').map(h => h.trim().toLowerCase().replace(/ /g, '_'));
+        
+        const meds = rows.slice(1).map(row => {
+          const values = row.split(',').map(v => v.trim());
+          const obj = {};
+          headers.forEach((h, i) => obj[h] = values[i]);
+          return {
+            brand_name: obj.brand_name || obj.name,
+            alias: obj.alias || '',
+            generic_name: obj.generic_name || '',
+            company_name: obj.company_name || obj.company || '',
+            drug_group: obj.drug_group || obj.group || '',
+            unit_category: obj.unit_category || obj.unit || 'Tablet',
+            gst_percent: parseInt(obj.gst_percent || obj.gst) || 12,
+            hsn_code: obj.hsn_code || '',
+            tablets_per_strip: parseInt(obj.tablets_per_strip || obj.strip_qty) || 10,
+            is_h1: obj.is_h1 === '1' || obj.is_h1 === 'true' ? 1 : 0
+          };
+        }).filter(m => m.brand_name);
+
+        if (meds.length === 0) throw new Error('No valid medicines found in CSV');
+
+        await api.post('/medicines/bulk', { medicines: meds });
+        showToast(`Imported ${meds.length} medicines successfully`);
+        load();
+      } catch (err) {
+        showToast(err.message, 'error');
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = ''; // Reset input
+  };
+
   return (
     <div>
       <div className="toolbar">
@@ -51,7 +93,11 @@ export default function Inventory() {
             <input className="form-input" placeholder="Search medicines..." value={search} onChange={e => setSearch(e.target.value)} />
           </div>
         </div>
-        <div className="toolbar-right">
+        <div className="toolbar-right flex gap-2">
+          <label className="btn btn-secondary cursor-pointer">
+            <Upload size={15}/> Import CSV
+            <input type="file" accept=".csv" className="hidden" onChange={handleCSVImport} />
+          </label>
           <button className="btn btn-primary" onClick={() => { setEditMed(null); setShowAdd(true); }}><Plus size={15}/> Add Medicine</button>
         </div>
       </div>
@@ -63,6 +109,7 @@ export default function Inventory() {
           <table className="data-table">
             <thead>
               <tr>
+                <th>Alias</th>
                 <th>Brand Name</th>
                 <th>Company</th>
                 <th>Group</th>
@@ -79,6 +126,7 @@ export default function Inventory() {
                 const nearExpiry = m.nearest_expiry && new Date(m.nearest_expiry) < new Date(Date.now() + 90*24*60*60*1000);
                 return (
                   <tr key={m.id}>
+                    <td><span className="badge badge-blue">{m.alias || '-'}</span></td>
                     <td style={{ fontWeight: 500 }}>
                       {m.brand_name}
                       {m.is_h1 === 1 && <span className="badge badge-red" style={{ marginLeft: 8, fontSize: 10 }}>H1</span>}
@@ -120,7 +168,7 @@ export default function Inventory() {
 }
 
 function MedicineModal({ medicine, onClose, onSave }) {
-  const [form, setForm] = useState(medicine || { brand_name: '', generic_name: '', company_name: '', drug_group: '', unit_category: 'Tablet', hsn_code: '', gst_percent: 12, schedule: '', is_h1: 0, tablets_per_strip: 10 });
+  const [form, setForm] = useState(medicine || { alias: '', brand_name: '', generic_name: '', company_name: '', drug_group: '', unit_category: 'Tablet', hsn_code: '', gst_percent: 12, schedule: '', is_h1: 0, tablets_per_strip: 10 });
   const [saving, setSaving] = useState(false);
   const showToast = useToast();
 
@@ -149,12 +197,12 @@ function MedicineModal({ medicine, onClose, onSave }) {
           <div className="modal-body">
             <div className="form-row">
               <div className="form-group">
-                <label className="form-label">Brand Name *</label>
-                <input className="form-input" value={form.brand_name} onChange={e => set('brand_name', e.target.value)} autoFocus />
+                <label className="form-label">Alias (Short Code)</label>
+                <input className="form-input" value={form.alias} onChange={e => set('alias', e.target.value)} placeholder="e.g. A1, B2" />
               </div>
               <div className="form-group">
-                <label className="form-label">Generic Name</label>
-                <input className="form-input" value={form.generic_name} onChange={e => set('generic_name', e.target.value)} />
+                <label className="form-label">Brand Name *</label>
+                <input className="form-input" value={form.brand_name} onChange={e => set('brand_name', e.target.value)} autoFocus />
               </div>
             </div>
             <div className="form-row">

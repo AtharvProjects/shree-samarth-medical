@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { api } from '../services/api';
 import { Save, Settings as SettingsIcon, Bell, Printer, Phone } from 'lucide-react';
 import WhatsAppSetup from '../components/WhatsAppSetup';
+import BackupRestore from '../components/BackupRestore';
 
 export default function Settings() {
   const [settings, setSettings] = useState({
@@ -199,6 +200,9 @@ export default function Settings() {
 
               {/* WhatsApp Integration */}
               <WhatsAppSetup />
+
+              {/* Data Safety */}
+              <BackupRestore />
             </div>
           </div>
 

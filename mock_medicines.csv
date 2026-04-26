@@ -1,0 +1,11 @@
+brand_name,alias,generic_name,company_name,drug_group,unit_category,gst_percent,hsn_code,tablets_per_strip,is_h1
+Paracetamol 500mg,P500,Paracetamol,GSK,Analgesics,Tablet,12,3004,10,0
+Amoxicillin 250mg,AMX,Amoxicillin,Abbott,Antibiotics,Capsule,12,3004,10,1
+Cetirizine 10mg,CET,Cetirizine,Cipla,Antihistamines,Tablet,12,3004,10,0
+Azithromycin 500mg,AZI,Azithromycin,Pfizer,Antibiotics,Tablet,12,3004,3,1
+Vitamin C 500mg,VITC,Ascorbic Acid,Roche,Supplements,Tablet,5,2936,15,0
+Pantoprazole 40mg,PAN40,Pantoprazole,Sun Pharma,Antacids,Tablet,12,3004,10,0
+Metformin 500mg,MET500,Metformin,Lupin,Antidiabetics,Tablet,12,3004,10,0
+Amlodipine 5mg,AML5,Amlodipine,Zydus,Antihypertensives,Tablet,12,3004,10,0
+Omeprazole 20mg,OME20,Omeprazole,Dr. Reddy's,Antacids,Capsule,12,3004,15,0
+Augmentin 625 Duo,AUG625,Amoxicillin + Clavulanic Acid,GSK,Antibiotics,Tablet,12,3004,10,1

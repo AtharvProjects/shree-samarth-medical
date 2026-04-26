@@ -16,22 +16,13 @@ const pageLabels = {
 };
 
 export default function Header({ activePage }) {
-  const [todaySales, setTodaySales] = useState(0);
-  const [invoiceCount, setInvoiceCount] = useState(0);
+  const [shopName, setShopName] = useState('Shree Samarth Medical');
 
   useEffect(() => {
-    const fetchStats = () => {
-      api.getDashboard().then(d => {
-        setTodaySales(d.today.total);
-        setInvoiceCount(d.today.count);
-      }).catch(() => {});
-    };
-
-    fetchStats();
-    
-    window.addEventListener('invoice-saved', fetchStats);
-    return () => window.removeEventListener('invoice-saved', fetchStats);
-  }, [activePage]);
+    api.getSettings().then(s => {
+      if (s.shop_name) setShopName(s.shop_name);
+    }).catch(() => {});
+  }, []);
 
   const today = new Date().toLocaleDateString('en-IN', {
     weekday: 'long', year: 'numeric', month: 'long', day: 'numeric'
@@ -44,13 +35,9 @@ export default function Header({ activePage }) {
         <span className="header-date">{today}</span>
       </div>
       <div className="header-right">
-        <div className="header-stat">
-          <span className="label">Today's Sales</span>
-          <span className="value">₹{todaySales.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
-        </div>
-        <div className="header-stat">
-          <span className="label">Bills</span>
-          <span className="value">{invoiceCount}</span>
+        <div className="trademark-container">
+           <div className="trademark-text">{shopName}</div>
+           <div className="trademark-badge">OFFICIAL</div>
         </div>
       </div>
     </header>

@@ -163,7 +163,7 @@ export default function Customers() {
                 className={`btn btn-sm ${activeTab === 'credit' ? 'btn-danger' : 'btn-ghost'}`}
                 onClick={() => setActiveTab('credit')}
               >
-                Udhaari ({customers.filter(c => c.credit_balance > 0).length})
+                Pending ({customers.filter(c => c.credit_balance > 0).length})
               </button>
               <button 
                 className={`btn btn-sm ${activeTab === 'cash' ? 'btn-primary' : 'btn-ghost'}`}
@@ -302,7 +302,7 @@ export default function Customers() {
                           <td>{new Date(inv.created_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</td>
                           <td className="font-bold">{inv.invoice_number}</td>
                           <td>
-                            <span className={`badge badge-${inv.payment_mode === 'Udhaari' ? 'red' : 'green'}`}>
+                            <span className={`badge badge-${inv.payment_mode === 'Pending' ? 'red' : 'green'}`}>
                               {inv.payment_mode}
                             </span>
                           </td>
@@ -388,7 +388,7 @@ export default function Customers() {
                     />
                   </div>
                   <div className="form-group">
-                    <label className="form-label">Outstanding Balance (Udhaari) ₹</label>
+                    <label className="form-label">Outstanding Balance (Pending) ₹</label>
                     <input 
                       type="number" 
                       step="0.01"

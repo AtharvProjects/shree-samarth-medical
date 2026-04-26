@@ -13,7 +13,7 @@ const db = new Database(DB_PATH);
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
 
-// Create all tables
+// Create all tables (Consolidated Schema)
 db.exec(`
   CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
@@ -31,6 +31,8 @@ db.exec(`
     gst_percent REAL DEFAULT 12,
     schedule TEXT DEFAULT '',
     is_h1 INTEGER DEFAULT 0,
+    alias TEXT DEFAULT '',
+    tablets_per_strip INTEGER DEFAULT 10,
     is_active INTEGER DEFAULT 1,
     created_at TEXT DEFAULT (datetime('now','localtime')),
     updated_at TEXT DEFAULT (datetime('now','localtime'))
@@ -63,16 +65,16 @@ db.exec(`
     FOREIGN KEY (supplier_id) REFERENCES suppliers(id)
   );
 
-    CREATE TABLE IF NOT EXISTS customers (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL,
-      phone TEXT DEFAULT '',
-      address TEXT DEFAULT '',
-      credit_balance REAL DEFAULT 0,
-      last_payment_mode TEXT DEFAULT 'Cash',
-      created_at TEXT DEFAULT (datetime('now','localtime')),
-      updated_at TEXT DEFAULT (datetime('now','localtime'))
-    );
+  CREATE TABLE IF NOT EXISTS customers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    phone TEXT DEFAULT '',
+    address TEXT DEFAULT '',
+    credit_balance REAL DEFAULT 0,
+    last_payment_mode TEXT DEFAULT 'Cash',
+    created_at TEXT DEFAULT (datetime('now','localtime')),
+    updated_at TEXT DEFAULT (datetime('now','localtime'))
+  );
 
   CREATE TABLE IF NOT EXISTS doctors (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -114,6 +116,7 @@ db.exec(`
     gst_percent REAL DEFAULT 12,
     gst_amount REAL DEFAULT 0,
     total REAL NOT NULL,
+    tablets_per_strip INTEGER DEFAULT 10,
     FOREIGN KEY (invoice_id) REFERENCES invoices(id) ON DELETE CASCADE,
     FOREIGN KEY (medicine_id) REFERENCES medicines(id),
     FOREIGN KEY (batch_id) REFERENCES batches(id)
@@ -124,6 +127,7 @@ db.exec(`
     supplier_id INTEGER NOT NULL,
     invoice_number TEXT DEFAULT '',
     total_amount REAL DEFAULT 0,
+    amount_paid REAL DEFAULT 0,
     notes TEXT DEFAULT '',
     purchase_date TEXT DEFAULT (datetime('now','localtime')),
     created_at TEXT DEFAULT (datetime('now','localtime')),
@@ -174,6 +178,29 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_invoices_customer ON invoices(customer_id);
   CREATE INDEX IF NOT EXISTS idx_invoice_items_invoice ON invoice_items(invoice_id);
   CREATE INDEX IF NOT EXISTS idx_customers_phone ON customers(phone);
+
+  CREATE TABLE IF NOT EXISTS audit_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    action TEXT NOT NULL,
+    entity_type TEXT NOT NULL,
+    entity_id INTEGER,
+    old_data TEXT,
+    new_data TEXT,
+    user_name TEXT DEFAULT 'System',
+    created_at TEXT DEFAULT (datetime('now','localtime'))
+  );
+
+  CREATE TABLE IF NOT EXISTS backups (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    file_path TEXT NOT NULL,
+    file_size INTEGER,
+    backup_type TEXT DEFAULT 'Manual',
+    status TEXT DEFAULT 'Success',
+    created_at TEXT DEFAULT (datetime('now','localtime'))
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_audit_logs_created ON audit_logs(created_at);
+  CREATE INDEX IF NOT EXISTS idx_backups_created ON backups(created_at);
 `);
 
 // Insert default settings if not exist
@@ -191,33 +218,5 @@ for (const [key, value] of Object.entries(defaults)) {
   insertSetting.run(key, value);
 }
 
-// Migration: Add last_payment_mode to customers if not exists
-try {
-  db.prepare("ALTER TABLE customers ADD COLUMN last_payment_mode TEXT DEFAULT 'Cash'").run();
-} catch (e) {
-  // Column already exists or table doesn't exist yet
-}
-
-// Migration: Add amount_paid to purchases if not exists
-try {
-  db.prepare("ALTER TABLE purchases ADD COLUMN amount_paid REAL DEFAULT 0").run();
-} catch (e) {
-  // Column already exists or table doesn't exist yet
-}
-
-// Migration: Add is_h1 to medicines if not exists
-try {
-  db.prepare("ALTER TABLE medicines ADD COLUMN is_h1 INTEGER DEFAULT 0").run();
-} catch (e) {}
-
-// Migration: Add tablets_per_strip to medicines (1×10, 1×15 strip logic)
-try {
-  db.prepare("ALTER TABLE medicines ADD COLUMN tablets_per_strip INTEGER DEFAULT 10").run();
-} catch (e) {}
-
-// Migration: Add tablets_per_strip to invoice_items to preserve strip info on saved bills
-try {
-  db.prepare("ALTER TABLE invoice_items ADD COLUMN tablets_per_strip INTEGER DEFAULT 10").run();
-} catch (e) {}
-
+db.DB_PATH = DB_PATH;
 module.exports = db;
