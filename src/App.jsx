@@ -12,6 +12,7 @@ import Purchases from './pages/Purchases';
 import Reports from './pages/Reports';
 import Settings from './pages/Settings';
 import NonMovingMedicines from './pages/NonMovingMedicines';
+import ErrorBoundary from './components/ErrorBoundary';
 
 export const ToastContext = createContext();
 export const useToast = () => useContext(ToastContext);
@@ -85,7 +86,9 @@ export default function App() {
         <div className="main-content">
           <Header activePage={activePage} />
           <div className="page-content">
-            <PageComponent key={activePage} onNavigate={setActivePage} />
+            <ErrorBoundary key={activePage}>
+              <PageComponent onNavigate={setActivePage} />
+            </ErrorBoundary>
           </div>
         </div>
       </div>

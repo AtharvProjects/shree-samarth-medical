@@ -12,9 +12,13 @@ export default function Reports() {
   });
   const [reportData, setReportData] = useState({ type: '', items: null });
   const [loading, setLoading] = useState(false);
+  const [shopName, setShopName] = useState('Shree Samarth Medical');
 
   useEffect(() => {
     fetchReportData();
+    api.getSettings().then(s => {
+      if (s.shop_name) setShopName(s.shop_name);
+    }).catch(() => {});
   }, [activeTab, dateRange]);
 
   const fetchReportData = async () => {
@@ -60,7 +64,7 @@ export default function Reports() {
   const exportToPDF = (items, title, headers) => {
     const doc = new jsPDF();
     doc.setFontSize(18);
-    doc.text('Shree Samarth Medical', 14, 20);
+    doc.text(shopName, 14, 20);
     doc.setFontSize(12);
     doc.text(title, 14, 30);
     doc.text(`Generated on: ${new Date().toLocaleString()}`, 14, 38);

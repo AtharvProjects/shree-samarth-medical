@@ -202,7 +202,7 @@ export function generateInvoicePDF(invoice, settings, action = 'save') {
   // Signature area
   doc.setFontSize(9);
   doc.setFont('helvetica', 'bold');
-  doc.text('For Shree Samarth Medical', rightX, y + 4, { align: 'right' });
+  doc.text(`For ${settings.shop_name || 'Shree Samarth Medical'}`, rightX, y + 4, { align: 'right' });
   doc.setDrawColor(150);
   doc.line(rightX - 50, y + 20, rightX, y + 20);
   doc.setFont('helvetica', 'normal');
